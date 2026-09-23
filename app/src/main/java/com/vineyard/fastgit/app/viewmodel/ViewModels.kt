@@ -42,6 +42,16 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _isDeviceFlowLoading = MutableStateFlow(false)
     val isDeviceFlowLoading: StateFlow<Boolean> = _isDeviceFlowLoading
 
+    // Multi-Account State Management
+    private val _accounts = MutableStateFlow<List<GitHubAccount>>(tokenManager.getAllAccounts())
+    val accounts: StateFlow<List<GitHubAccount>> = _accounts
+
+    private val _activeAccount = MutableStateFlow<GitHubAccount?>(tokenManager.getActiveAccount())
+    val activeAccount: StateFlow<GitHubAccount?> = _activeAccount
+
+    private val _isAddingAccount = MutableStateFlow(false)
+    val isAddingAccount: StateFlow<Boolean> = _isAddingAccount
+
     companion object {
         const val ADMIN_CLIENT_ID = "Ov23lijUer4XCyoGdmvw"
         private const val LEGACY_DUMMY_CLIENT_ID = "Ov23liaVFastGitClient"
@@ -54,9 +64,19 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             tokenManager.saveOAuthCredentials(ADMIN_CLIENT_ID, tokenManager.getOAuthClientSecret())
         }
 
+        refreshAccountsState()
+
         if (tokenManager.isLoggedIn() || tokenManager.isDemoMode()) {
             loadCurrentUser()
         }
+    }
+
+    fun refreshAccountsState() {
+        val all = tokenManager.getAllAccounts()
+        val active = tokenManager.getActiveAccount()
+        _accounts.value = all
+        _activeAccount.value = active
+        _isLoggedIn.value = tokenManager.isLoggedIn() || tokenManager.isDemoMode()
     }
 
     fun getCurrentClientId(): String {
@@ -80,6 +100,62 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         return "https://github.com/login/oauth/authorize?client_id=$clientId&redirect_uri=$redirectUri&scope=$scope"
     }
 
+    // Controls the "Add Account" overlay/mode safely without logging out current active session
+    fun startAddAccount() {
+        _isAddingAccount.value = true
+        _errorMessage.value = null
+    }
+
+    fun cancelAddAccount() {
+        _isAddingAccount.value = false
+        _errorMessage.value = null
+        _deviceCodeState.value = null
+        _isDeviceFlowLoading.value = false
+    }
+
+    fun switchAccount(account: GitHubAccount) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                val switched = tokenManager.switchAccount(account.login)
+                if (switched) {
+                    tokenManager.setDemoMode(false)
+                    refreshAccountsState()
+                    loadCurrentUser()
+                    com.vineyard.fastgit.app.utils.AppLogger.s("MultiAccount", "Switched active account to: ${account.login}")
+                }
+            } catch (e: Exception) {
+                _errorMessage.value = "Failed to switch account: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun removeAccount(account: GitHubAccount) {
+        viewModelScope.launch {
+            tokenManager.removeAccount(account.login)
+            refreshAccountsState()
+            if (tokenManager.isLoggedIn()) {
+                loadCurrentUser()
+            } else {
+                logout()
+            }
+            com.vineyard.fastgit.app.utils.AppLogger.i("MultiAccount", "Removed account session: ${account.login}")
+        }
+    }
+
+    fun signOutAllAccounts() {
+        tokenManager.clearAllAccounts()
+        tokenManager.setDemoMode(false)
+        _user.value = null
+        _accounts.value = emptyList()
+        _activeAccount.value = null
+        _isLoggedIn.value = false
+        _isAddingAccount.value = false
+        com.vineyard.fastgit.app.utils.AppLogger.i("MultiAccount", "Signed out all GitHub accounts.")
+    }
+
     fun handleOAuthCode(code: String) {
         if (code.isBlank()) return
         viewModelScope.launch {
@@ -97,13 +173,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
                 val token = response.accessToken
                 if (!token.isNullOrBlank()) {
-                    tokenManager.saveToken(token)
-                    tokenManager.setDemoMode(false)
-                    com.vineyard.fastgit.app.utils.AppLogger.s("OAuth", "OAuth Token exchanged successfully! Validating user profile...")
-                    val api = RetrofitClient.getService(tokenManager)
-                    val u = api.getCurrentUser()
-                    _user.value = u
-                    _isLoggedIn.value = true
+                    onTokenAcquired(token)
                 } else {
                     val err = response.errorDescription ?: response.error ?: "Unable to exchange code for GitHub OAuth access token."
                     _errorMessage.value = "OAuth Error: $err"
@@ -112,10 +182,55 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 _errorMessage.value = "OAuth Authentication failed: ${e.message}"
                 com.vineyard.fastgit.app.utils.AppLogger.e("OAuth", "OAuth exception: ${e.message}", e)
-                tokenManager.clearToken()
             } finally {
                 _isLoading.value = false
             }
+        }
+    }
+
+    private suspend fun onTokenAcquired(token: String) {
+        tokenManager.setDemoMode(false)
+        com.vineyard.fastgit.app.utils.AppLogger.s("OAuth", "Token acquired successfully! Fetching user identity...")
+
+        // Fetch user info using the newly acquired token
+        try {
+            // Temporary token manager to load newly acquired user info
+            val tempManager = TokenManager(getApplication())
+            tempManager.saveToken(token)
+            val api = RetrofitClient.getService(tempManager)
+            val profile = api.getCurrentUser()
+
+            // Count unread notifications if available
+            val unreadCount = try {
+                val notifs = api.getNotifications()
+                notifs.count { it.unread }
+            } catch (e: Exception) {
+                0
+            }
+
+            val newAccount = GitHubAccount(
+                id = profile.id,
+                login = profile.login,
+                name = profile.name ?: profile.login,
+                avatarUrl = profile.avatarUrl ?: "",
+                accessToken = token,
+                isActive = true,
+                unreadNotifications = unreadCount
+            )
+
+            tokenManager.saveOrUpdateAccount(newAccount)
+            refreshAccountsState()
+            _user.value = profile
+            _isLoggedIn.value = true
+            _isAddingAccount.value = false
+            com.vineyard.fastgit.app.utils.AppLogger.s("MultiAccount", "Account '${newAccount.login}' saved and set as active session!")
+        } catch (e: Exception) {
+            // Fallback: save token directly if user fetch encounters an issue
+            tokenManager.saveToken(token)
+            refreshAccountsState()
+            _isLoggedIn.value = true
+            _isAddingAccount.value = false
+            loadCurrentUser()
         }
     }
 
@@ -178,13 +293,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     val token = tokenResponse.accessToken
                     if (!token.isNullOrBlank()) {
                         com.vineyard.fastgit.app.utils.AppLogger.s("DeviceFlow", "Device Flow Token approved! Loading user profile...")
-                        tokenManager.saveToken(token)
-                        tokenManager.setDemoMode(false)
-                        val api = RetrofitClient.getService(tokenManager)
-                        val u = api.getCurrentUser()
-                        _user.value = u
-                        _isLoggedIn.value = true
                         _deviceCodeState.value = null
+                        onTokenAcquired(token)
                         break
                     } else {
                         when (tokenResponse.error) {
@@ -225,7 +335,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     fun enableDemoMode() {
         tokenManager.setDemoMode(true)
-        tokenManager.clearToken()
         _isLoggedIn.value = true
         _user.value = User(
             id = 101,
@@ -257,7 +366,21 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val api = RetrofitClient.getService(tokenManager)
-                _user.value = api.getCurrentUser()
+                val u = api.getCurrentUser()
+                _user.value = u
+
+                // Sync active account metadata if needed
+                val active = tokenManager.getActiveAccount()
+                if (active != null) {
+                    val updated = active.copy(
+                        id = u.id,
+                        login = u.login,
+                        name = u.name ?: active.name,
+                        avatarUrl = u.avatarUrl ?: active.avatarUrl
+                    )
+                    tokenManager.saveOrUpdateAccount(updated)
+                    refreshAccountsState()
+                }
             } catch (e: Exception) {
                 // Ignore or fallback
             }
@@ -265,10 +388,21 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
-        tokenManager.clearToken()
+        val active = tokenManager.getActiveAccount()
+        if (active != null) {
+            tokenManager.removeAccount(active.login)
+        } else {
+            tokenManager.clearToken()
+        }
         tokenManager.setDemoMode(false)
-        _user.value = null
-        _isLoggedIn.value = false
+        refreshAccountsState()
+
+        if (tokenManager.isLoggedIn()) {
+            loadCurrentUser()
+        } else {
+            _user.value = null
+            _isLoggedIn.value = false
+        }
     }
 
     fun clearError() {
@@ -585,7 +719,7 @@ class RepositoryViewModel(application: Application) : AndroidViewModel(applicati
                     try {
                         com.vineyard.fastgit.app.utils.AppLogger.i("RepositoryViewModel", "Downloading source zipball for $sourceOwner/$sourceRepo...")
                         val zipResponse = api.downloadZipball(sourceOwner, sourceRepo, "main")
-                        
+
                         if (zipResponse.isSuccessful && zipResponse.body() != null) {
                             val tempZip = File.createTempFile("import_source_", ".zip")
                             val tempDir = File.createTempFile("import_extract_", "")
