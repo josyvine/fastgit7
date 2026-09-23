@@ -2187,3 +2187,36 @@ fun RepoSettingsTabContent(repoDetailViewModel: RepoDetailViewModel, onBack: () 
         }
     }
 }
+
+private fun copyFullTextToClipboard(context: Context, label: String, text: String): Boolean {
+    val systemClipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val bytes = text.toByteArray(Charsets.UTF_8)
+    if (bytes.size < 800 * 1024) {
+        try {
+            systemClipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+            return true
+        } catch (_: Exception) {
+            // Fall back to FileProvider URI below if binder limits are reached
+        }
+    }
+
+    return try {
+        val cacheFile = File(context.cacheDir, "full_log_clipboard.txt")
+        cacheFile.writeText(text)
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.provider",
+            cacheFile
+        )
+        val clip = ClipData.newUri(context.contentResolver, label, uri)
+        systemClipboard.setPrimaryClip(clip)
+        true
+    } catch (e: Exception) {
+        try {
+            systemClipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+}
