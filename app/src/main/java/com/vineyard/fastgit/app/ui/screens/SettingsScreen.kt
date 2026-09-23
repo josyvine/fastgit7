@@ -5,9 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
@@ -17,15 +19,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.vineyard.fastgit.app.models.Repository
+import com.vineyard.fastgit.app.ui.components.AccountsBottomSheet
 import com.vineyard.fastgit.app.ui.theme.*
 import com.vineyard.fastgit.app.viewmodel.AuthViewModel
 import com.vineyard.fastgit.app.viewmodel.SettingsViewModel
@@ -42,6 +48,11 @@ fun SettingsScreen(
     val themeMode by settingsViewModel.themeMode.collectAsState()
     val cacheSize by settingsViewModel.cacheSize.collectAsState()
 
+    // Multi-Account States
+    val accounts by authViewModel.accounts.collectAsState()
+    val activeAccount by authViewModel.activeAccount.collectAsState()
+    val currentUser by authViewModel.user.collectAsState()
+
     // Propagation Feature States
     val repositories by settingsViewModel.repositories.collectAsState()
     val savedAliases by settingsViewModel.savedAliases.collectAsState()
@@ -54,6 +65,7 @@ fun SettingsScreen(
     val downloadStep by settingsViewModel.downloadStep.collectAsState()
 
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showAccountsSheet by remember { mutableStateOf(false) }
 
     // Local Form Input States
     var showCreateForm by remember { mutableStateOf(false) }
@@ -630,34 +642,117 @@ fun SettingsScreen(
                 }
 
                 3 -> {
-                    // Account & Security Card
+                    // GitHub Account & Multi-Session Management Card
                     Card(
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         border = ButtonDefaults.outlinedButtonBorder(enabled = true),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
                             Text(
-                                text = "Account & Security",
+                                text = "Signed In Profile",
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontSize = 14.sp
                             )
 
+                            // Current User Profile Summary Row
+                            val activeDisplayLogin = activeAccount?.login ?: currentUser?.login ?: "Guest User"
+                            val activeDisplayName = activeAccount?.name ?: currentUser?.name ?: "FastGit Explorer"
+                            val activeAvatarUrl = activeAccount?.avatarUrl ?: currentUser?.avatarUrl ?: ""
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { showAccountsSheet = true }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (activeAvatarUrl.isNotBlank()) {
+                                    AsyncImage(
+                                        model = activeAvatarUrl,
+                                        contentDescription = activeDisplayLogin,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .size(50.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(50.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Person,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(14.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = activeDisplayName,
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "@$activeDisplayLogin",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    )
+                                }
+
+                                Icon(
+                                    imageVector = Icons.Default.SwapHoriz,
+                                    contentDescription = "Switch Account",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                            // Switch / Manage Accounts Row
                             SettingsRow(
-                                icon = Icons.Default.Security,
-                                title = "Authentication Token",
-                                subtitle = if (authViewModel.tokenManager.isDemoMode()) "Demo Account" else "Encrypted Token Stored",
-                                onClick = {}
+                                icon = Icons.Default.ManageAccounts,
+                                title = "Switch / Manage Accounts",
+                                subtitle = "${accounts.size} account(s) signed in",
+                                onClick = { showAccountsSheet = true }
                             )
 
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
+                            // Add New Account Action
                             SettingsRow(
-                                icon = Icons.Default.ExitToApp,
-                                title = "Log Out",
-                                subtitle = "Disconnect current account session",
+                                icon = Icons.Default.PersonAdd,
+                                title = "Add Another Account",
+                                subtitle = "Sign in to another GitHub account",
+                                onClick = {
+                                    authViewModel.startAddAccount()
+                                }
+                            )
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                            // Log Out Row (Current Session)
+                            SettingsRow(
+                                icon = Icons.AutoMirrored.Filled.ExitToApp,
+                                title = "Log Out Current Account",
+                                subtitle = "Disconnect @$activeDisplayLogin",
                                 iconTint = GhErrorRed,
                                 onClick = { showLogoutDialog = true }
                             )
@@ -684,17 +779,50 @@ fun SettingsScreen(
         }
     }
 
+    // Official-style Accounts Management Bottom Sheet
+    if (showAccountsSheet) {
+        AccountsBottomSheet(
+            accounts = accounts,
+            activeAccount = activeAccount,
+            onDismissRequest = { showAccountsSheet = false },
+            onSelectAccount = { account ->
+                authViewModel.switchAccount(account)
+                Toast.makeText(context, "Switched to ${account.login}", Toast.LENGTH_SHORT).show()
+            },
+            onSignOutAccount = { account ->
+                authViewModel.removeAccount(account)
+                Toast.makeText(context, "Signed out ${account.login}", Toast.LENGTH_SHORT).show()
+                if (!authViewModel.tokenManager.isLoggedIn()) {
+                    showAccountsSheet = false
+                    onLogout()
+                }
+            },
+            onSignOutAllAccounts = {
+                authViewModel.signOutAllAccounts()
+                showAccountsSheet = false
+                onLogout()
+            },
+            onAddAccount = {
+                showAccountsSheet = false
+                authViewModel.startAddAccount()
+            }
+        )
+    }
+
     if (showLogoutDialog) {
+        val currentLogin = activeAccount?.login ?: currentUser?.login ?: "current session"
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
             title = { Text("Log Out", color = MaterialTheme.colorScheme.onSurface) },
-            text = { Text("Are you sure you want to log out of FastGit?", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)) },
+            text = { Text("Are you sure you want to log out of @$currentLogin?", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)) },
             confirmButton = {
                 Button(
                     onClick = {
                         showLogoutDialog = false
                         authViewModel.logout()
-                        onLogout()
+                        if (!authViewModel.tokenManager.isLoggedIn()) {
+                            onLogout()
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = GhErrorRed)
                 ) {
