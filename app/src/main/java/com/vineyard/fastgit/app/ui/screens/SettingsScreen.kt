@@ -660,9 +660,13 @@ fun SettingsScreen(
                                 fontSize = 14.sp
                             )
 
-                            // Current User Profile Summary Row
-                            val activeDisplayLogin = activeAccount?.login ?: currentUser?.login ?: "Guest User"
-                            val activeDisplayName = activeAccount?.name ?: currentUser?.name ?: "FastGit Explorer"
+                            // Current User Profile Summary Row (Strictly driven by activeAccount)
+                            val activeDisplayLogin = activeAccount?.login?.ifBlank { null }
+                                ?: currentUser?.login?.ifBlank { null }
+                                ?: "Guest User"
+                            val activeDisplayName = activeAccount?.name?.ifBlank { null }
+                                ?: currentUser?.name?.ifBlank { null }
+                                ?: activeDisplayLogin
                             val activeAvatarUrl = activeAccount?.avatarUrl ?: currentUser?.avatarUrl ?: ""
 
                             Row(
@@ -788,6 +792,7 @@ fun SettingsScreen(
             onSelectAccount = { account ->
                 authViewModel.switchAccount(account)
                 Toast.makeText(context, "Switched to ${account.login}", Toast.LENGTH_SHORT).show()
+                showAccountsSheet = false
             },
             onSignOutAccount = { account ->
                 authViewModel.removeAccount(account)
@@ -810,7 +815,10 @@ fun SettingsScreen(
     }
 
     if (showLogoutDialog) {
-        val currentLogin = activeAccount?.login ?: currentUser?.login ?: "current session"
+        val currentLogin = activeAccount?.login?.ifBlank { null }
+            ?: currentUser?.login?.ifBlank { null }
+            ?: "current session"
+
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
             title = { Text("Log Out", color = MaterialTheme.colorScheme.onSurface) },
