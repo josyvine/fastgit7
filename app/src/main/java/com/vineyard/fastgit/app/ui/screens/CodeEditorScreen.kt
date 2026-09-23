@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -40,8 +41,10 @@ import androidx.compose.ui.unit.sp
 import com.vineyard.fastgit.app.models.FileItem
 import com.vineyard.fastgit.app.ui.theme.*
 import com.vineyard.fastgit.app.utils.SyntaxHighlighter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -74,7 +77,7 @@ fun CodeEditorScreen(
     // Track the last state pushed to the undo stack to optimize memory allocations
     var lastPushedText by remember(initialContent) { mutableStateOf(initialContent) }
 
-    // High-performance line count calculation (avoids allocating large string arrays on each recomposition)
+    // High-performance line count calculation
     val lineCount = remember(codeText) {
         var count = 1
         for (i in codeText.indices) {
@@ -83,7 +86,7 @@ fun CodeEditorScreen(
         count
     }
 
-    // Memoized single-string line numbers column (eliminates creating 1000+ Compose Text nodes)
+    // Memoized single-string line numbers column
     val lineNumbersString = remember(lineCount) {
         StringBuilder(lineCount * 5).apply {
             for (i in 1..lineCount) {
@@ -93,9 +96,24 @@ fun CodeEditorScreen(
         }.toString()
     }
 
-    // Memoize syntax highlighting so regex does not re-execute on every scroll or composition tick
-    val highlightedText = remember(codeText, fileItem.name) {
-        SyntaxHighlighter.highlight(codeText, fileItem.name)
+    // Asynchronous syntax highlighting to prevent UI thread blocking on initial render
+    var highlightedText by remember(initialContent, fileItem.name) {
+        mutableStateOf(
+            if (initialContent.length > 25000 || lineCount > 500) {
+                AnnotatedString(initialContent)
+            } else {
+                SyntaxHighlighter.highlight(initialContent, fileItem.name)
+            }
+        )
+    }
+
+    LaunchedEffect(codeText, fileItem.name) {
+        withContext(Dispatchers.Default) {
+            val highlighted = SyntaxHighlighter.highlight(codeText, fileItem.name)
+            withContext(Dispatchers.Main) {
+                highlightedText = highlighted
+            }
+        }
     }
 
     val visualTransformation = remember(highlightedText) {
@@ -393,36 +411,41 @@ fun CodeEditorScreen(
                 )
             }
 
-            // Left-Side Interactive Fast-Scroll Draggable Handle
-            val maxScroll = verticalScrollState.maxValue
-            if (maxScroll > 0 && animatedAlpha > 0f) {
-                val density = LocalDensity.current
-                val handleHeightDp = 50.dp
-                val handleHeightPx = with(density) { handleHeightDp.toPx() }
-                val totalTrackHeightPx = with(density) { maxHeight.toPx() }
-                val usableTrackHeightPx = (totalTrackHeightPx - handleHeightPx).coerceAtLeast(1f)
+            // Left-Side Interactive Fast-Scroll Draggable Handle (Optimized for 60/120fps with Zero Recomposition)
+            val density = LocalDensity.current
+            val handleHeightDp = 50.dp
+            val handleHeightPx = with(density) { handleHeightDp.toPx() }
+            val totalTrackHeightPx = with(density) { maxHeight.toPx() }
+            val usableTrackHeightPx = (totalTrackHeightPx - handleHeightPx).coerceAtLeast(1f)
 
-                val scrollFraction = (verticalScrollState.value.toFloat() / maxScroll).coerceIn(0f, 1f)
-                val handleOffsetY = (scrollFraction * usableTrackHeightPx).roundToInt()
-                val currentLineNumber = (scrollFraction * (lineCount - 1)).roundToInt() + 1
-
+            if (animatedAlpha > 0f) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .offset { IntOffset(x = 0, y = handleOffsetY) }
+                        .offset {
+                            val maxScroll = verticalScrollState.maxValue
+                            val scrollFraction = if (maxScroll > 0) {
+                                (verticalScrollState.value.toFloat() / maxScroll).coerceIn(0f, 1f)
+                            } else 0f
+                            val handleOffsetY = (scrollFraction * usableTrackHeightPx).roundToInt()
+                            IntOffset(x = 0, y = handleOffsetY)
+                        }
                         .alpha(animatedAlpha)
-                        .pointerInput(maxScroll, usableTrackHeightPx) {
+                        .pointerInput(usableTrackHeightPx) {
                             detectVerticalDragGestures(
                                 onDragStart = { isHandleDragging = true },
                                 onDragEnd = { isHandleDragging = false },
                                 onDragCancel = { isHandleDragging = false },
                                 onVerticalDrag = { change, dragAmount ->
                                     change.consume()
-                                    val currentY = (verticalScrollState.value.toFloat() / maxScroll) * usableTrackHeightPx
-                                    val newY = (currentY + dragAmount).coerceIn(0f, usableTrackHeightPx)
-                                    val targetScroll = ((newY / usableTrackHeightPx) * maxScroll).roundToInt()
-                                    coroutineScope.launch {
-                                        verticalScrollState.scrollTo(targetScroll)
+                                    val maxScroll = verticalScrollState.maxValue
+                                    if (maxScroll > 0) {
+                                        val currentY = (verticalScrollState.value.toFloat() / maxScroll) * usableTrackHeightPx
+                                        val newY = (currentY + dragAmount).coerceIn(0f, usableTrackHeightPx)
+                                        val targetScroll = ((newY / usableTrackHeightPx) * maxScroll).roundToInt()
+                                        coroutineScope.launch {
+                                            verticalScrollState.scrollTo(targetScroll)
+                                        }
                                     }
                                 }
                             )
@@ -437,8 +460,7 @@ fun CodeEditorScreen(
                             shape = RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp, topStart = 4.dp, bottomStart = 4.dp),
                             color = MaterialTheme.colorScheme.primary,
                             shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .size(width = 30.dp, height = handleHeightDp)
+                            modifier = Modifier.size(width = 30.dp, height = handleHeightDp)
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
@@ -453,20 +475,12 @@ fun CodeEditorScreen(
                             }
                         }
 
-                        // Floating Line Indicator Badge (Visible during active scrolling & dragging)
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.9f),
+                        // Floating Line Indicator Badge (Isolated from parent recomposition)
+                        FastScrollLineIndicatorBadge(
+                            verticalScrollState = verticalScrollState,
+                            lineCount = lineCount,
                             modifier = Modifier.padding(start = 6.dp)
-                        ) {
-                            Text(
-                                text = "L: $currentLineNumber",
-                                color = MaterialTheme.colorScheme.inverseOnSurface,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                            )
-                        }
+                        )
                     }
                 }
             }
@@ -752,6 +766,40 @@ fun CodeEditorScreen(
                 }
             },
             containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+}
+
+/**
+ * Isolated Line Indicator Badge to prevent re-composing the entire editor on every scroll tick.
+ */
+@Composable
+private fun FastScrollLineIndicatorBadge(
+    verticalScrollState: androidx.compose.foundation.ScrollState,
+    lineCount: Int,
+    modifier: Modifier = Modifier
+) {
+    val currentLineNumber by remember(verticalScrollState, lineCount) {
+        derivedStateOf {
+            val maxScroll = verticalScrollState.maxValue
+            if (maxScroll > 0) {
+                val fraction = (verticalScrollState.value.toFloat() / maxScroll).coerceIn(0f, 1f)
+                (fraction * (lineCount - 1)).roundToInt() + 1
+            } else 1
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.9f),
+        modifier = modifier
+    ) {
+        Text(
+            text = "L: $currentLineNumber",
+            color = MaterialTheme.colorScheme.inverseOnSurface,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
         )
     }
 }
