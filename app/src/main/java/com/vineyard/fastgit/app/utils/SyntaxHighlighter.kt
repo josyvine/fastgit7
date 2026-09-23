@@ -3,10 +3,8 @@ package com.vineyard.fastgit.app.utils
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import java.util.regex.Pattern
 
 object SyntaxHighlighter {
@@ -33,14 +31,26 @@ object SyntaxHighlighter {
         "androidTestImplementation", "kapt", "ksp", "plugins", "id", "version", "apply", "from"
     )
 
-    // Precompiled high-speed parsing pattern executing sequentially across the document stream
+    // Precompiled linear-time regex with zero catastrophic backtracking
     private val COMBINED_PATTERN = Pattern.compile(
-        "(//[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|#[^\\r\\n]*)" +                      // Group 1: Comments
-        "|(\"[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*\"|'[^'\\\\]*(?:\\\\.[^'\\\\]*)*')" +  // Group 2: Strings
-        "|\\b(" + KEYWORDS.joinToString("|") + ")\\b" +                         // Group 3: Keywords
-        "|(@\\w+)" +                                                            // Group 4: Annotations
-        "|(\\b\\d+\\b)"                                                         // Group 5: Numbers
+        "(//[^\\r\\n]*|/\\*[\\s\\S]*?\\*/|#[^\\r\\n]*)" +                           // Group 1: Comments
+        "|(\"(?:\\\\.|[^\"\\r\\n\\\\])*\"|'(?:\\\\.|[^'\\r\\n\\\\])*')" +           // Group 2: Strings (linear $O(N)$ execution)
+        "|\\b(" + KEYWORDS.joinToString("|") + ")\\b" +                              // Group 3: Keywords
+        "|(@\\w+)" +                                                                 // Group 4: Annotations
+        "|(\\b\\d+\\b)"                                                              // Group 5: Numbers
     )
+
+    // Cached memoization to return instant O(1) results on redundant layout passes
+    @Volatile
+    private var cachedCode: String? = null
+    @Volatile
+    private var cachedSearchQuery: String? = null
+    @Volatile
+    private var cachedCaseSensitive: Boolean = false
+    @Volatile
+    private var cachedIsRegex: Boolean = false
+    @Volatile
+    private var cachedResult: AnnotatedString? = null
 
     /**
      * Highlights the provided code with language syntax coloring and optional search query match styling.
@@ -56,14 +66,27 @@ object SyntaxHighlighter {
             return AnnotatedString("")
         }
 
+        // Return memoized result instantly if identical input was already styled
+        if (code == cachedCode &&
+            searchQuery == cachedSearchQuery &&
+            isCaseSensitive == cachedCaseSensitive &&
+            isRegex == cachedIsRegex &&
+            cachedResult != null
+        ) {
+            return cachedResult!!
+        }
+
         val baseBuilder = AnnotatedString.Builder(code)
-        val matcher = COMBINED_PATTERN.matcher(code)
+
+        // For massive text payloads exceeding 250,000 characters, limit regex scope to preserve 60/120fps
+        val parseLength = minOf(code.length, 250000)
+        val parseRegion = if (parseLength < code.length) code.substring(0, parseLength) else code
+        val matcher = COMBINED_PATTERN.matcher(parseRegion)
 
         while (matcher.find()) {
             val start = matcher.start()
             val end = matcher.end()
 
-            // Style matching segments based on capture group indices directly without string copying
             when {
                 matcher.group(1) != null -> { // Comments
                     baseBuilder.addStyle(
@@ -103,9 +126,15 @@ object SyntaxHighlighter {
             }
         }
 
-        // If no active search query exists, return the syntax-highlighted string directly
+        // If no active search query exists, cache and return
         if (searchQuery.isEmpty()) {
-            return baseBuilder.toAnnotatedString()
+            val result = baseBuilder.toAnnotatedString()
+            cachedCode = code
+            cachedSearchQuery = searchQuery
+            cachedCaseSensitive = isCaseSensitive
+            cachedIsRegex = isRegex
+            cachedResult = result
+            return result
         }
 
         // Overlay active search match highlights across the styled text
@@ -138,6 +167,12 @@ object SyntaxHighlighter {
             // Ignore incomplete or invalid regex patterns during live typing
         }
 
-        return finalBuilder.toAnnotatedString()
+        val finalResult = finalBuilder.toAnnotatedString()
+        cachedCode = code
+        cachedSearchQuery = searchQuery
+        cachedCaseSensitive = isCaseSensitive
+        cachedIsRegex = isRegex
+        cachedResult = finalResult
+        return finalResult
     }
 }
