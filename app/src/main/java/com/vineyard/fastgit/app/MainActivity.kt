@@ -71,13 +71,19 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
+                val isAddingAccount by authViewModel.isAddingAccount.collectAsState()
 
-                if (isLoggedIn) {
+                if (isLoggedIn && !isAddingAccount) {
                     MainScreen(authViewModel = authViewModel)
                 } else {
                     AuthScreen(
                         authViewModel = authViewModel,
-                        onLoginSuccess = { }
+                        onLoginSuccess = {
+                            authViewModel.cancelAddAccount()
+                        },
+                        onDismiss = {
+                            authViewModel.cancelAddAccount()
+                        }
                     )
                 }
             }
