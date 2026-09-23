@@ -26,7 +26,13 @@ class TokenManager(context: Context) {
     fun getAllAccounts(): List<GitHubAccount> {
         val json = prefs.getString(KEY_ACCOUNTS_LIST, null) ?: return emptyList()
         return try {
-            accountsAdapter.fromJson(json) ?: emptyList()
+            val list = accountsAdapter.fromJson(json) ?: emptyList()
+            val activeLogin = prefs.getString(KEY_ACTIVE_LOGIN, null)
+            if (activeLogin != null) {
+                list.map { it.copy(isActive = it.login.equals(activeLogin, ignoreCase = true)) }
+            } else {
+                list
+            }
         } catch (e: Exception) {
             emptyList()
         }
@@ -35,7 +41,16 @@ class TokenManager(context: Context) {
     @Synchronized
     fun getActiveAccount(): GitHubAccount? {
         val accounts = getAllAccounts()
-        return accounts.firstOrNull { it.isActive } ?: accounts.firstOrNull()
+        if (accounts.isEmpty()) return null
+
+        val activeLogin = prefs.getString(KEY_ACTIVE_LOGIN, null)
+        val active = if (!activeLogin.isNullOrBlank()) {
+            accounts.firstOrNull { it.login.equals(activeLogin, ignoreCase = true) }
+        } else {
+            accounts.firstOrNull { it.isActive }
+        } ?: accounts.first()
+
+        return active.copy(isActive = true)
     }
 
     @Synchronized
@@ -45,8 +60,7 @@ class TokenManager(context: Context) {
             (it.id != 0L && it.id == account.id) || (it.login.isNotBlank() && it.login.equals(account.login, ignoreCase = true))
         }
 
-        // Deactivate all others if this account is active
-        val shouldBeActive = account.isActive || currentAccounts.isEmpty()
+        val shouldBeActive = account.isActive || currentAccounts.isEmpty() || currentAccounts.none { it.isActive }
         val updatedList = currentAccounts.map {
             if (shouldBeActive) it.copy(isActive = false) else it
         }.toMutableList()
@@ -61,9 +75,11 @@ class TokenManager(context: Context) {
 
         saveAccountsList(updatedList)
 
-        // Keep legacy KEY_TOKEN in sync with active account
         if (shouldBeActive) {
-            prefs.edit().putString(KEY_TOKEN, newAccount.accessToken).apply()
+            prefs.edit()
+                .putString(KEY_ACTIVE_LOGIN, newAccount.login)
+                .putString(KEY_TOKEN, newAccount.accessToken)
+                .commit()
         }
     }
 
@@ -77,7 +93,11 @@ class TokenManager(context: Context) {
         }
 
         saveAccountsList(updated)
-        prefs.edit().putString(KEY_TOKEN, target.accessToken).apply()
+        prefs.edit()
+            .putString(KEY_ACTIVE_LOGIN, target.login)
+            .putString(KEY_TOKEN, target.accessToken)
+            .commit()
+
         return true
     }
 
@@ -85,20 +105,28 @@ class TokenManager(context: Context) {
     fun removeAccount(login: String) {
         val accounts = getAllAccounts().toMutableList()
         val toRemove = accounts.firstOrNull { it.login.equals(login, ignoreCase = true) } ?: return
-        val wasActive = toRemove.isActive
+        val wasActive = toRemove.isActive || login.equals(prefs.getString(KEY_ACTIVE_LOGIN, null), ignoreCase = true)
 
         accounts.removeAll { it.login.equals(login, ignoreCase = true) }
 
-        if (wasActive && accounts.isNotEmpty()) {
-            val newActive = accounts[0].copy(isActive = true)
-            accounts[0] = newActive
-            saveAccountsList(accounts)
-            prefs.edit().putString(KEY_TOKEN, newActive.accessToken).apply()
-        } else if (accounts.isEmpty()) {
-            saveAccountsList(emptyList())
-            clearToken()
+        if (accounts.isNotEmpty()) {
+            if (wasActive) {
+                val newActive = accounts[0].copy(isActive = true)
+                accounts[0] = newActive
+                saveAccountsList(accounts)
+                prefs.edit()
+                    .putString(KEY_ACTIVE_LOGIN, newActive.login)
+                    .putString(KEY_TOKEN, newActive.accessToken)
+                    .commit()
+            } else {
+                saveAccountsList(accounts)
+            }
         } else {
-            saveAccountsList(accounts)
+            saveAccountsList(emptyList())
+            prefs.edit()
+                .remove(KEY_ACTIVE_LOGIN)
+                .remove(KEY_TOKEN)
+                .commit()
         }
     }
 
@@ -106,13 +134,16 @@ class TokenManager(context: Context) {
     fun clearAllAccounts() {
         prefs.edit()
             .remove(KEY_ACCOUNTS_LIST)
+            .remove(KEY_ACTIVE_LOGIN)
             .remove(KEY_TOKEN)
-            .apply()
+            .commit()
     }
 
     private fun saveAccountsList(accounts: List<GitHubAccount>) {
         val json = accountsAdapter.toJson(accounts)
-        prefs.edit().putString(KEY_ACCOUNTS_LIST, json).apply()
+        prefs.edit()
+            .putString(KEY_ACCOUNTS_LIST, json)
+            .commit()
     }
 
     // ==========================================
@@ -120,9 +151,8 @@ class TokenManager(context: Context) {
     // ==========================================
 
     fun saveToken(token: String) {
-        prefs.edit().putString(KEY_TOKEN, token).apply()
+        prefs.edit().putString(KEY_TOKEN, token).commit()
 
-        // Update active account token if exists
         val active = getActiveAccount()
         if (active != null) {
             saveOrUpdateAccount(active.copy(accessToken = token, isActive = true))
@@ -142,7 +172,7 @@ class TokenManager(context: Context) {
         if (active != null) {
             removeAccount(active.login)
         } else {
-            prefs.edit().remove(KEY_TOKEN).apply()
+            prefs.edit().remove(KEY_TOKEN).remove(KEY_ACTIVE_LOGIN).commit()
         }
     }
 
@@ -156,7 +186,7 @@ class TokenManager(context: Context) {
     // ==========================================
 
     fun setDemoMode(isDemo: Boolean) {
-        prefs.edit().putBoolean(KEY_DEMO, isDemo).apply()
+        prefs.edit().putBoolean(KEY_DEMO, isDemo).commit()
     }
 
     fun isDemoMode(): Boolean {
@@ -164,7 +194,7 @@ class TokenManager(context: Context) {
     }
 
     fun saveThemeMode(mode: String) {
-        prefs.edit().putString(KEY_THEME_MODE, mode).apply()
+        prefs.edit().putString(KEY_THEME_MODE, mode).commit()
     }
 
     fun getThemeMode(): String {
@@ -175,7 +205,7 @@ class TokenManager(context: Context) {
         prefs.edit()
             .putString(KEY_OAUTH_CLIENT_ID, clientId)
             .putString(KEY_OAUTH_CLIENT_SECRET, clientSecret)
-            .apply()
+            .commit()
     }
 
     fun getOAuthClientId(): String {
@@ -191,6 +221,7 @@ class TokenManager(context: Context) {
     companion object {
         private const val KEY_TOKEN = "github_access_token"
         private const val KEY_ACCOUNTS_LIST = "github_accounts_list"
+        private const val KEY_ACTIVE_LOGIN = "github_active_login"
         private const val KEY_DEMO = "is_demo_mode"
         private const val KEY_THEME_MODE = "app_theme_mode"
         private const val KEY_OAUTH_CLIENT_ID = "oauth_client_id"
