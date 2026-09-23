@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import com.vineyard.fastgit.app.models.*
 import com.vineyard.fastgit.app.ui.theme.*
 import com.vineyard.fastgit.app.viewmodel.RepoDetailViewModel
@@ -394,8 +395,13 @@ fun RepoDetailScreen(
                                 text = { Text("Copy Build Logs", color = MaterialTheme.colorScheme.onSurface) },
                                 onClick = {
                                     showLogsContextMenu = false
-                                    clipboardManager.setText(AnnotatedString(workflowLogs ?: ""))
-                                    Toast.makeText(context, "Build logs copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                    val logs = workflowLogs ?: ""
+                                    if (logs.isNotEmpty()) {
+                                        val copied = copyFullTextToClipboard(context, "Build Logs", logs)
+                                        if (copied) {
+                                            Toast.makeText(context, "Build logs copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 },
                                 leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
                             )
@@ -2181,4 +2187,3 @@ fun RepoSettingsTabContent(repoDetailViewModel: RepoDetailViewModel, onBack: () 
         }
     }
 }
-
