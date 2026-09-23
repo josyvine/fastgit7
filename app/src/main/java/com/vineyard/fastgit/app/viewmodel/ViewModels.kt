@@ -21,6 +21,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import okhttp3.OkHttpClient
+import retrofit2.Retrofit
+import retrofit2.converter.moshi.MoshiConverterFactory
 
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
     val tokenManager = TokenManager(application)
@@ -117,10 +120,28 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isLoading.value = true
             try {
+                // Update SharedPreferences synchronously
                 val switched = tokenManager.switchAccount(account.login)
                 if (switched) {
                     tokenManager.setDemoMode(false)
-                    refreshAccountsState()
+
+                    // Immediately update in-memory state so checkmarks & profile cards update at once
+                    val updatedList = _accounts.value.map {
+                        it.copy(isActive = it.login.equals(account.login, ignoreCase = true))
+                    }
+                    val switchedAccount = updatedList.firstOrNull { it.login.equals(account.login, ignoreCase = true) } ?: account.copy(isActive = true)
+                    _accounts.value = updatedList
+                    _activeAccount.value = switchedAccount
+
+                    // Pre-fill user header with known switched account info to prevent stale display
+                    _user.value = User(
+                        id = switchedAccount.id,
+                        login = switchedAccount.login,
+                        name = switchedAccount.name ?: switchedAccount.login,
+                        avatarUrl = switchedAccount.avatarUrl
+                    )
+
+                    // Fetch latest profile details from GitHub API with the new token
                     loadCurrentUser()
                     com.vineyard.fastgit.app.utils.AppLogger.s("MultiAccount", "Switched active account to: ${account.login}")
                 }
@@ -192,17 +213,29 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         tokenManager.setDemoMode(false)
         com.vineyard.fastgit.app.utils.AppLogger.s("OAuth", "Token acquired successfully! Fetching user identity...")
 
-        // Fetch user info using the newly acquired token
         try {
-            // Temporary token manager to load newly acquired user info
-            val tempManager = TokenManager(getApplication())
-            tempManager.saveToken(token)
-            val api = RetrofitClient.getService(tempManager)
-            val profile = api.getCurrentUser()
+            // Build an isolated Retrofit instance with this specific token to avoid interfering with current TokenManager state
+            val isolatedClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val req = chain.request().newBuilder()
+                        .header("Authorization", "Bearer $token")
+                        .header("Accept", "application/vnd.github.v3+json")
+                        .build()
+                    chain.proceed(req)
+                }
+                .build()
 
-            // Count unread notifications if available
+            val isolatedService = Retrofit.Builder()
+                .baseUrl("https://api.github.com/")
+                .client(isolatedClient)
+                .addConverterFactory(MoshiConverterFactory.create())
+                .build()
+                .create(GitHubApiService::class.java)
+
+            val profile = isolatedService.getCurrentUser()
+
             val unreadCount = try {
-                val notifs = api.getNotifications()
+                val notifs = isolatedService.getNotifications()
                 notifs.count { it.unread }
             } catch (e: Exception) {
                 0
@@ -218,14 +251,15 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 unreadNotifications = unreadCount
             )
 
+            // Save and make active atomically
             tokenManager.saveOrUpdateAccount(newAccount)
             refreshAccountsState()
+
             _user.value = profile
             _isLoggedIn.value = true
             _isAddingAccount.value = false
             com.vineyard.fastgit.app.utils.AppLogger.s("MultiAccount", "Account '${newAccount.login}' saved and set as active session!")
         } catch (e: Exception) {
-            // Fallback: save token directly if user fetch encounters an issue
             tokenManager.saveToken(token)
             refreshAccountsState()
             _isLoggedIn.value = true
@@ -367,19 +401,22 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val api = RetrofitClient.getService(tokenManager)
                 val u = api.getCurrentUser()
-                _user.value = u
+                val currentActive = tokenManager.getActiveAccount()
 
-                // Sync active account metadata if needed
-                val active = tokenManager.getActiveAccount()
-                if (active != null) {
-                    val updated = active.copy(
-                        id = u.id,
-                        login = u.login,
-                        name = u.name ?: active.name,
-                        avatarUrl = u.avatarUrl ?: active.avatarUrl
-                    )
-                    tokenManager.saveOrUpdateAccount(updated)
-                    refreshAccountsState()
+                // Only set user if it corresponds to the currently active account session
+                if (currentActive == null || currentActive.login.equals(u.login, ignoreCase = true)) {
+                    _user.value = u
+
+                    if (currentActive != null) {
+                        val updated = currentActive.copy(
+                            id = u.id,
+                            login = u.login,
+                            name = u.name ?: currentActive.name,
+                            avatarUrl = u.avatarUrl ?: currentActive.avatarUrl
+                        )
+                        tokenManager.saveOrUpdateAccount(updated)
+                        refreshAccountsState()
+                    }
                 }
             } catch (e: Exception) {
                 // Ignore or fallback
