@@ -4,8 +4,12 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VpnKey
@@ -30,12 +34,15 @@ import com.vineyard.fastgit.app.viewmodel.AuthViewModel
 @Composable
 fun AuthScreen(
     authViewModel: AuthViewModel,
-    onLoginSuccess: () -> Unit
+    onLoginSuccess: () -> Unit,
+    onDismiss: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val isLoading by authViewModel.isLoading.collectAsState()
     val errorMessage by authViewModel.errorMessage.collectAsState()
     val isLoggedIn by authViewModel.isLoggedIn.collectAsState()
+    val isAddingAccount by authViewModel.isAddingAccount.collectAsState()
+    val accounts by authViewModel.accounts.collectAsState()
 
     val isDeviceFlowLoading by authViewModel.isDeviceFlowLoading.collectAsState()
     val deviceCodeState by authViewModel.deviceCodeState.collectAsState()
@@ -47,8 +54,10 @@ fun AuthScreen(
     var oauthClientIdInput by remember { mutableStateOf(authViewModel.getCurrentClientId()) }
     var oauthClientSecretInput by remember { mutableStateOf(authViewModel.tokenManager.getOAuthClientSecret()) }
 
-    LaunchedEffect(isLoggedIn) {
-        if (isLoggedIn) {
+    val canDismiss = isAddingAccount || accounts.isNotEmpty() || onDismiss != null
+
+    LaunchedEffect(isLoggedIn, isAddingAccount) {
+        if (isLoggedIn && !isAddingAccount) {
             onLoginSuccess()
         }
     }
@@ -64,18 +73,56 @@ fun AuthScreen(
                     )
                 )
             )
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
     ) {
         Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Dismiss / Back Bar: Visible when adding an account or when existing accounts exist
+            if (canDismiss) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            authViewModel.cancelAddAccount()
+                            onDismiss?.invoke()
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Cancel and return to active account",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    Text(
+                        text = "Add Account",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    // Spacer to balance layout
+                    Spacer(modifier = Modifier.size(48.dp))
+                }
+            } else {
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // App Logo Icon Frame
             Surface(
                 modifier = Modifier
-                    .size(96.dp)
+                    .size(92.dp)
                     .clip(RoundedCornerShape(24.dp)),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                 border = ButtonDefaults.outlinedButtonBorder(enabled = true)
@@ -84,27 +131,31 @@ fun AuthScreen(
                     Icon(
                         imageVector = Icons.Default.Code,
                         contentDescription = "FastGit Logo",
-                        modifier = Modifier.size(54.dp),
+                        modifier = Modifier.size(52.dp),
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "FastGit Workspace",
-                fontSize = 28.sp,
+                text = if (isAddingAccount) "Add GitHub Account" else "FastGit Workspace",
+                fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
             )
 
             Text(
-                text = "Full Android GitHub Client & File Manager",
+                text = if (isAddingAccount) {
+                    "Authorize an additional GitHub account without signing out of your current session"
+                } else {
+                    "Full Android GitHub Client & Workspace File Manager"
+                },
                 fontSize = 14.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 8.dp, bottom = 32.dp)
+                modifier = Modifier.padding(top = 6.dp, bottom = 24.dp)
             )
 
             Card(
@@ -118,7 +169,7 @@ fun AuthScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "Sign in with GitHub",
+                        text = "Sign in to GitHub",
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 18.sp,
@@ -257,24 +308,25 @@ fun AuthScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Guest / Demo mode button
-                    OutlinedButton(
-                        onClick = { authViewModel.enableDemoMode() },
-                        shape = RoundedCornerShape(12.dp),
-                        border = ButtonDefaults.outlinedButtonBorder(enabled = true),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = GhPrimaryViolet)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Explore in Demo / Guest Mode",
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Medium
-                        )
+                    // Demo mode is only available on first login, not when adding additional accounts
+                    if (!isAddingAccount && accounts.isEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = { authViewModel.enableDemoMode() },
+                            shape = RoundedCornerShape(12.dp),
+                            border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = GhPrimaryViolet)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Explore in Demo / Guest Mode",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
             }
@@ -295,6 +347,8 @@ fun AuthScreen(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(30.dp))
         }
     }
 
