@@ -1342,18 +1342,14 @@ class RepoDetailViewModel(
             return
         }
 
+        _isLogsLoading.value = true
+        _workflowLogs.value = "Retrieving workflow build parameters..."
+
         pollingJob = viewModelScope.launch(Dispatchers.IO) {
             var shouldContinuePolling = true
             var isFirstFetch = true
 
             while (shouldContinuePolling) {
-                if (isFirstFetch) {
-                    _isLogsLoading.value = true
-                    withContext(Dispatchers.Main) {
-                        _workflowLogs.value = "Retrieving workflow build parameters..."
-                    }
-                }
-
                 try {
                     val api = RetrofitClient.getService(tokenManager)
                     val jobsResponse = api.getWorkflowRunJobs(owner, repoName, runId)
@@ -1376,7 +1372,10 @@ class RepoDetailViewModel(
                             combinedLogs.append("--- JOB STEP: ${job.name} (Status: ${job.status}, Conclusion: ${job.conclusion ?: "pending"}) ---\n")
                             try {
                                 val logBody = api.getJobLogs(owner, repoName, job.id)
-                                combinedLogs.append(logBody.string())
+                                val logText = logBody.use { body ->
+                                    body.charStream().buffered().readText()
+                                }
+                                combinedLogs.append(logText)
                             } catch (e: Exception) {
                                 if (e is retrofit2.HttpException && e.code() == 404) {
                                     combinedLogs.append("[Active Job Build Steps]\n")
@@ -1406,8 +1405,9 @@ class RepoDetailViewModel(
                             combinedLogs.append("\n")
                         }
 
+                        val resultString = combinedLogs.toString()
                         withContext(Dispatchers.Main) {
-                            _workflowLogs.value = combinedLogs.toString()
+                            _workflowLogs.value = resultString
                         }
 
                         if (!anyJobActive) {
@@ -1424,7 +1424,9 @@ class RepoDetailViewModel(
                     }
                 } finally {
                     if (isFirstFetch) {
-                        _isLogsLoading.value = false
+                        withContext(Dispatchers.Main) {
+                            _isLogsLoading.value = false
+                        }
                         isFirstFetch = false
                     }
                 }
@@ -1481,14 +1483,18 @@ class RepoDetailViewModel(
             return
         }
 
-        viewModelScope.launch {
-            _isLoading.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                _isLoading.value = true
+            }
             try {
                 val api = RetrofitClient.getService(tokenManager)
                 val jobsResponse = api.getWorkflowRunJobs(owner, repoName, runId)
                 val jobs = jobsResponse.jobs ?: emptyList()
                 if (jobs.isEmpty()) {
-                    Toast.makeText(context, "No jobs available to extract logs.", Toast.LENGTH_SHORT).show()
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "No jobs available to extract logs.", Toast.LENGTH_SHORT).show()
+                    }
                     return@launch
                 }
 
@@ -1497,7 +1503,10 @@ class RepoDetailViewModel(
                     combinedLogs.append("--- JOB STEP: ${job.name} (Status: ${job.status}, Conclusion: ${job.conclusion ?: "pending"}) ---\n")
                     try {
                         val logBody = api.getJobLogs(owner, repoName, job.id)
-                        combinedLogs.append(logBody.string())
+                        val logText = logBody.use { body ->
+                            body.charStream().buffered().readText()
+                        }
+                        combinedLogs.append(logText)
                     } catch (e: Exception) {
                         if (e is retrofit2.HttpException && e.code() == 404) {
                             combinedLogs.append("[Active Job Build Steps]\n")
@@ -1527,14 +1536,21 @@ class RepoDetailViewModel(
                     combinedLogs.append("\n")
                 }
 
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                val clip = ClipData.newPlainText("Build Logs", combinedLogs.toString())
-                clipboard.setPrimaryClip(clip)
-                Toast.makeText(context, "Build logs copied to clipboard successfully!", Toast.LENGTH_SHORT).show()
+                val resultText = combinedLogs.toString()
+                withContext(Dispatchers.Main) {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = ClipData.newPlainText("Build Logs", resultText)
+                    clipboard.setPrimaryClip(clip)
+                    Toast.makeText(context, "Build logs copied to clipboard successfully!", Toast.LENGTH_SHORT).show()
+                }
             } catch (e: Exception) {
-                Toast.makeText(context, "Failed to capture build logs: ${e.message}", Toast.LENGTH_SHORT).show()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Failed to capture build logs: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
             } finally {
-                _isLoading.value = false
+                withContext(Dispatchers.Main) {
+                    _isLoading.value = false
+                }
             }
         }
     }
