@@ -99,7 +99,9 @@ fun CodeEditorScreen(
     // Asynchronous syntax highlighting to prevent UI thread blocking on initial render
     var highlightedText by remember(initialContent, fileItem.name) {
         mutableStateOf(
-            if (initialContent.length > 25000 || lineCount > 500) {
+            if (initialContent.isEmpty()) {
+                AnnotatedString("")
+            } else if (initialContent.length > 25000 || lineCount > 500) {
                 AnnotatedString(initialContent)
             } else {
                 SyntaxHighlighter.highlight(initialContent, fileItem.name)
@@ -108,6 +110,10 @@ fun CodeEditorScreen(
     }
 
     LaunchedEffect(codeText, fileItem.name) {
+        if (codeText.isEmpty()) {
+            highlightedText = AnnotatedString("")
+            return@LaunchedEffect
+        }
         withContext(Dispatchers.Default) {
             val highlighted = SyntaxHighlighter.highlight(codeText, fileItem.name)
             withContext(Dispatchers.Main) {
@@ -116,9 +122,14 @@ fun CodeEditorScreen(
         }
     }
 
-    val visualTransformation = remember(highlightedText) {
-        VisualTransformation { _ ->
-            TransformedText(highlightedText, OffsetMapping.Identity)
+    // VisualTransformation guarded against any length divergence to prevent OffsetMapping crashes
+    val visualTransformation = remember(highlightedText, codeText) {
+        VisualTransformation { text ->
+            if (text.text.isEmpty() || highlightedText.text.length != text.text.length) {
+                TransformedText(AnnotatedString(text.text), OffsetMapping.Identity)
+            } else {
+                TransformedText(highlightedText, OffsetMapping.Identity)
+            }
         }
     }
 
@@ -228,6 +239,7 @@ fun CodeEditorScreen(
                                             undoStack = undoStack + oldText
                                         }
                                         codeText = ""
+                                        highlightedText = AnnotatedString("")
                                         undoStack = undoStack + ""
                                         lastPushedText = ""
                                         redoStack = emptyList()
@@ -248,6 +260,7 @@ fun CodeEditorScreen(
                                             undoStack = undoStack + oldText
                                         }
                                         codeText = ""
+                                        highlightedText = AnnotatedString("")
                                         undoStack = undoStack + ""
                                         lastPushedText = ""
                                         redoStack = emptyList()
@@ -385,6 +398,9 @@ fun CodeEditorScreen(
                 BasicTextField(
                     value = codeText,
                     onValueChange = { newText ->
+                        if (newText.isEmpty()) {
+                            highlightedText = AnnotatedString("")
+                        }
                         codeText = newText
                         val delta = abs(newText.length - lastPushedText.length)
 
