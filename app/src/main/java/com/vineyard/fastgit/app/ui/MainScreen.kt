@@ -50,9 +50,25 @@ fun MainScreen(
     val pagerState = rememberPagerState(pageCount = { navItems.size })
     val coroutineScope = rememberCoroutineScope()
 
+    val activeAccount by authViewModel.activeAccount.collectAsState()
+
     var activeDetailRepo by remember { mutableStateOf<Repository?>(null) }
     var initialShowCreateDialog by remember { mutableStateOf(false) }
     var initialShowImportDialog by remember { mutableStateOf(false) }
+
+    // Synchronize and reload all app screens whenever the active GitHub account changes
+    LaunchedEffect(activeAccount?.login) {
+        if (activeAccount != null) {
+            AppLogger.i("MainScreen", "Active account changed to: ${activeAccount?.login}. Refreshing all workspace data...")
+            homeViewModel.loadHomeData()
+            repositoryViewModel.fetchRepositories()
+            notificationViewModel.loadNotifications()
+            profileViewModel.loadProfile()
+            settingsViewModel.fetchRepositories()
+            // Reset active repo detail view if user switched accounts
+            activeDetailRepo = null
+        }
+    }
 
     LaunchedEffect(pagerState.currentPage) {
         AppLogger.i("MainScreen", "Switched tab to: ${navItems[pagerState.currentPage].title}")
