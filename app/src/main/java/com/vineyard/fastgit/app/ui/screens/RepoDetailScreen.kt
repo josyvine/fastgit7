@@ -335,7 +335,7 @@ fun RepoDetailScreen(
                         }
                     }
 
-                    // Monospace Log Console Area
+                    // Monospace Log Console Area - Optimized with Virtualized LazyColumn
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -356,16 +356,33 @@ fun RepoDetailScreen(
                                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                             }
                         } else {
-                            val verticalScroll = rememberScrollState()
-                            Text(
-                                text = workflowLogs ?: "Build parameters requested. Awaiting actions context...",
-                                color = Color(0xFFC9D1D9),
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScroll(verticalScroll)
-                            )
+                            val logLines = remember(workflowLogs) {
+                                workflowLogs?.lineSequence()?.toList() ?: emptyList()
+                            }
+
+                            if (logLines.isEmpty()) {
+                                Text(
+                                    text = "Build parameters requested. Awaiting actions context...",
+                                    color = Color(0xFFC9D1D9),
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    items(count = logLines.size) { index ->
+                                        Text(
+                                            text = logLines[index],
+                                            color = Color(0xFFC9D1D9),
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            lineHeight = 14.sp
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         DropdownMenu(
@@ -2164,3 +2181,4 @@ fun RepoSettingsTabContent(repoDetailViewModel: RepoDetailViewModel, onBack: () 
         }
     }
 }
+
